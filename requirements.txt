@@ -1,0 +1,9 @@
+torch>=2.1
+transformers>=4.40
+datasets>=2.18
+accelerate>=0.30
+sentencepiece
+tqdm
+numpy
+# Optional (for benchmark reproduction similar to Table 3):
+lm-eval>=0.4.2
