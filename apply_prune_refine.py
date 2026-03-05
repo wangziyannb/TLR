@@ -88,7 +88,7 @@ def parse_args():
     p.add_argument(
         "--wanda_store_inps",
         type=str,
-        default="cpu",
+        default="gpu",
         choices=["cpu", "gpu"],
         help="Where to store calibration hidden states for sequential Wanda. cpu saves GPU memory.",
     )
@@ -173,7 +173,14 @@ def prepare_wanda_calibration_inputs(model, calib_batches, device: torch.device,
         model.config.use_cache = False
 
     # LLaMA-style layout: model.model.layers is a ModuleList of decoder layers.
-    layers = model.model.layers
+    try:
+        layers = model.model.layers
+    except AttributeError:
+        try:
+            layers = model.base_model.layers
+        except AttributeError:
+            layers = model.base_model.decoder.layers
+
     if len(layers) == 0:
         raise ValueError("Model has no decoder layers at model.model.layers")
 
@@ -187,21 +194,39 @@ def prepare_wanda_calibration_inputs(model, calib_batches, device: torch.device,
     inps = torch.zeros((nsamples, seqlen, hidden_size), dtype=dtype, device=store_device)
     outs = torch.zeros_like(inps)
 
-    cache = {"i": 0, "attention_mask": None, "position_ids": None}
+    cache = {'i': 0, 'attention_mask': None, "position_ids": None, "cache_position": None, "position_embeddings": None}
 
     class Catcher(nn.Module):
         def __init__(self, module: nn.Module):
             super().__init__()
             self.module = module
+            if hasattr(module, "self_attn"):
+                self.self_attn = module.self_attn
+            elif hasattr(module, "attn"):
+                self.attn = module.attn
 
         def forward(self, inp, **kwargs):
             i = cache["i"]
             if i < nsamples:
-                inps[i].copy_(inp.detach().to(device=store_device, dtype=dtype))
+                x = inp.detach()
+                if x.dim() == 3:  # [B, T, H]
+                    B = x.size(0)
+                    for b in range(B):
+                        if i >= inps.size(0):
+                            break
+                        inps[i].copy_(x[b].to(device=store_device, dtype=dtype))
+                        i += 1
+                else:  # [T, H]
+                    inps[i].copy_(x.to(device=store_device, dtype=dtype))
+                    i += 1
+                # inps[i].copy_(inp.detach().to(device=store_device, dtype=dtype))
                 cache["i"] = i + 1
                 # HF passes these to each decoder layer; needed when we call layers directly.
-                cache["attention_mask"] = kwargs.get("attention_mask", None)
-                cache["position_ids"] = kwargs.get("position_ids", None)
+                cache['attention_mask'] = kwargs['attention_mask']
+                cache['position_ids'] = kwargs['position_ids']
+                if 'cache_position' in kwargs and 'position_embeddings' in kwargs:
+                    cache['cache_position'] = kwargs['cache_position']
+                    cache['position_embeddings'] = kwargs['position_embeddings']
             raise ValueError
 
     # Swap in catcher
@@ -225,10 +250,14 @@ def prepare_wanda_calibration_inputs(model, calib_batches, device: torch.device,
     attention_mask = cache["attention_mask"]
     position_ids = cache["position_ids"]
 
-    if attention_mask is None or position_ids is None:
-        # Fallback: works for some models, but for LLaMA this should not happen.
-        attention_mask = torch.ones((1, seqlen), device=device, dtype=torch.long)
-        position_ids = torch.arange(seqlen, device=device, dtype=torch.long).unsqueeze(0)
+    # if attention_mask is None or position_ids is None:
+    #     # Fallback: works for some models, but for LLaMA this should not happen.
+    #     attention_mask = torch.ones((1, seqlen), device=device, dtype=torch.long)
+    #     position_ids = torch.arange(seqlen, device=device, dtype=torch.long).unsqueeze(0)
+    if 'cache_position' in cache and 'position_embeddings' in cache:
+        cache_position = cache['cache_position']
+        position_embeddings = cache['position_embeddings']
+        return inps, outs, attention_mask, position_ids, cache_position, position_embeddings
 
     return inps, outs, attention_mask, position_ids
 
@@ -267,7 +296,7 @@ def apply_wanda_sequential_prune_and_refine(
         print(f"[warn] Requested {args.c4_seqs} calibration seqs but got {len(calib_batches)} from C4 iterator.")
 
     print("Capturing layer-0 inputs (WANDA-style)...")
-    inps, outs, attention_mask, position_ids = prepare_wanda_calibration_inputs(
+    inps, outs, attention_mask, position_ids, cache_position, position_embeddings = prepare_wanda_calibration_inputs(
         model,
         calib_batches,
         device=device,
@@ -298,7 +327,7 @@ def apply_wanda_sequential_prune_and_refine(
                 if inps.device.type == "cpu":
                     inp = inp.to(device)
                 with torch.autocast(device_type=str(device).split(":")[0], dtype=amp_dtype, enabled=(device.type == "cuda")):
-                    out = layer(inp, attention_mask=attention_mask, position_ids=position_ids)[0]
+                    out = layer(inp, attention_mask=attention_mask, position_ids=position_ids,cache_position= cache_position, position_embeddings=position_embeddings)[0]
                 outs[j].copy_(out.detach().to(device=outs.device, dtype=outs.dtype))
             inps, outs = outs, inps
             continue
@@ -329,8 +358,12 @@ def apply_wanda_sequential_prune_and_refine(
             if inps.device.type == "cpu":
                 inp = inp.to(device)
             with torch.autocast(device_type=str(device).split(":")[0], dtype=amp_dtype, enabled=(device.type == "cuda")):
-                _ = layer(inp, attention_mask=attention_mask, position_ids=position_ids)[0]
-
+                out = layer(
+                    inp,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    cache_position= cache_position, position_embeddings=position_embeddings
+                )[0]
         for h in handles:
             h.remove()
 
@@ -358,7 +391,7 @@ def apply_wanda_sequential_prune_and_refine(
             if inps.device.type == "cpu":
                 inp = inp.to(device)
             with torch.autocast(device_type=str(device).split(":")[0], dtype=amp_dtype, enabled=(device.type == "cuda")):
-                out = layer(inp, attention_mask=attention_mask, position_ids=position_ids)[0]
+                out = layer(inp, attention_mask=attention_mask, position_ids=position_ids,cache_position= cache_position, position_embeddings=position_embeddings)[0]
             outs[j].copy_(out.detach().to(device=outs.device, dtype=outs.dtype))
 
         # Swap buffers so next layer sees pruned activations.
