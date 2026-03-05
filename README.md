@@ -1,4 +1,4 @@
-# Targeted Low-rank Refinement (TLR) — 复现代码仓库（无原作者代码版）
+# Unofficial Targeted Low-rank Refinement (TLR)
 
 这是一个从论文描述 **重新实现** 的 codebase，用于复现 OpenReview 论文：
 
@@ -19,9 +19,6 @@ OpenReview PDF: https://openreview.net/pdf?id=S0ncZdwcLt
 以及生成剪枝 mask 的：
 - **Magnitude pruning**（unstructured + N:M 结构化）
 - **Wanda pruning**（需要 C4 calibration；论文用 128 sequences）
-
-> SparseGPT 由于实现复杂且可能需要巨大的 Hessian 近似，本仓库提供“外部 mask 接入”的接口建议，
-> 你可以用 SparseGPT 官方/社区实现生成 mask，然后用本仓库的 refinement 对 mask 做后处理。
 
 ---
 
@@ -91,25 +88,7 @@ lm_eval       --model hf       --model_args pretrained=runs/llama2_7b_mag50_ours
 
 ---
 
-## 4. 重要说明 / 可能导致数值不完全一致的原因
-
-由于原作者未公开代码，且论文里有一些实现细节未完全固定，复现时数值可能有轻微偏差，主要来自：
-
-1. **WikiText-2 PPL 的评估细节**  
-   - chunking/stride、是否丢弃最后不足 `seq_len` 的部分、是否用 validation/test
-2. **Wanda calibration 采样方式**  
-   - 论文说用 C4 的 128 sequences，但没固定随机种子/采样策略
-3. **SVD 的数值实现**  
-   - 本仓库对大矩阵默认用 `torch.svd_lowrank`（随机化 SVD）；小矩阵用 full SVD
-   - 你可以用 `--svd_backend full` 强制全量 SVD（但对大层会非常慢/可能不可行）
-4. **模型版本差异**  
-   - 论文写的是 “LLaMA-7B/13B”，你可能用的是 Llama-2 或 Llama-3.x；基线会不同
-
-建议先用 `--max_layers 5` 做 smoke test，确认流程跑通再跑全量。
-
----
-
-## 5. 代码导读（对应论文）
+## 4. 代码导读（对应论文）
 
 - `tlr/refinement.py`
   - `zero_shot_svd_refine`：Baseline 1
@@ -124,6 +103,3 @@ lm_eval       --model hf       --model_args pretrained=runs/llama2_7b_mag50_ours
   - 端到端：load model → mask → refine → ppl → export
 
 ---
-
-如果你希望我帮你把 **Table 1/2/3** 全部做成“一键跑完并汇总成表格”的脚本（含自动保存 json/csv），
-我也可以在这个 codebase 上继续完善。
