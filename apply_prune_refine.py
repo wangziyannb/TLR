@@ -204,6 +204,8 @@ def prepare_wanda_calibration_inputs(model, calib_batches, device: torch.device,
                 self.self_attn = module.self_attn
             elif hasattr(module, "attn"):
                 self.attn = module.attn
+            if hasattr(module, "attention_type"):
+                self.attention_type = self.module.attention_type
 
         def forward(self, inp, **kwargs):
             i = cache["i"]
@@ -220,7 +222,7 @@ def prepare_wanda_calibration_inputs(model, calib_batches, device: torch.device,
                     inps[i].copy_(x.to(device=store_device, dtype=dtype))
                     i += 1
                 # inps[i].copy_(inp.detach().to(device=store_device, dtype=dtype))
-                cache["i"] = i + 1
+                cache["i"] = i
                 # HF passes these to each decoder layer; needed when we call layers directly.
                 cache['attention_mask'] = kwargs['attention_mask']
                 cache['position_ids'] = kwargs['position_ids']
