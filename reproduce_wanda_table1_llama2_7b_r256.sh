@@ -7,7 +7,7 @@ OUT=${OUT:-runs/wanda_table1_llama2_7b}
 SEQ_LEN=${SEQ_LEN:-2048}
 WIKITEXT_SEQS=${WIKITEXT_SEQS:-128}
 C4_SEQS=${C4_SEQS:-128}
-RANK=${RANK:-128}
+RANK=${RANK:-256}
 ITERS=${ITERS:-50}
 
 mkdir -p "$OUT"
