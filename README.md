@@ -86,6 +86,36 @@ lm_eval       --model hf       --model_args pretrained=runs/llama2_7b_mag50_ours
 
 你可以把输出的四个任务 accuracy 做平均，得到和论文 Table 3 一样的 AVG。
 
+### 3.1 导出当前模型的参数字典（`torch.save`）
+
+如果你想保留当前模型里 attention / MLP 线性层的参数，可以加：
+
+```bash
+python scripts/apply_prune_refine.py \
+  --model meta-llama/Llama-2-7b-hf \
+  --pruning magnitude --sparsity 0.5 \
+  --refine ours --rank 128 --iters 50 \
+  --output_dir runs/llama2_7b_mag50_ours \
+  --export_param_dict
+```
+
+会在 `output_dir` 下保存 `model_param_dict.pt`（可用 `--param_dict_filename` 自定义文件名）。
+字典 key 形式为：
+
+- `layer_index.self_attention.q_proj.weight`
+- `layer_index.self_attention.q_proj.lr1`
+- `layer_index.self_attention.q_proj.lr2`
+- `layer_index.mlp.up_proj.weight`
+- `layer_index.mlp.up_proj.lr1`
+- `layer_index.mlp.up_proj.lr2`
+
+其中：
+- `weight` 是当前层的稀疏 base weight（若 `--refine none`，则是普通 `nn.Linear.weight`）
+- `lr1 = lora_A`，shape 为 `(rank, in_features)`
+- `lr2 = lora_B`，shape 为 `(out_features, rank)`
+
+于是统一可以写成：`merged_weight = weight + lr2 @ lr1`。
+
 ---
 
 ## 4. 代码导读（对应论文）

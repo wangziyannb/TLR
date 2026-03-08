@@ -33,8 +33,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -113,6 +114,21 @@ def parse_args():
     # Export
     p.add_argument("--output_dir", type=str, required=True)
     p.add_argument("--export_merged_hf", action="store_true", help="Export merged dense HF model (so you can run lm_eval easily)")
+    p.add_argument(
+        "--export_param_dict",
+        action="store_true",
+        help=(
+            "Save the current attention/MLP parameter dictionary with torch.save using keys "
+            "layer_index.module_name.proj_name.{weight,lr1,lr2}. "
+            "For plain nn.Linear layers, lr1/lr2 are saved as empty tensors."
+        ),
+    )
+    p.add_argument(
+        "--param_dict_filename",
+        type=str,
+        default="model_param_dict.pt",
+        help="Filename used by --export_param_dict inside output_dir.",
+    )
     p.add_argument("--max_layers", type=int, default=None, help="Debug: only process first N linear layers")
 
     return p.parse_args()
@@ -146,6 +162,87 @@ def merge_and_restore_linear(model: nn.Module) -> None:
             lin.bias.copy_(mod.bias)
         set_module(model, name, lin)
 
+
+@torch.no_grad()
+def _parse_param_export_name(qualified_name: str) -> Optional[Tuple[str, str, str]]:
+    """Map HF module names to the requested export key prefix.
+
+    Example:
+        model.layers.3.self_attn.q_proj -> ("3", "self_attention", "q_proj")
+        model.layers.3.mlp.up_proj       -> ("3", "mlp", "up_proj")
+    """
+    parts = qualified_name.split(".")
+    if "layers" not in parts:
+        return None
+
+    idx = parts.index("layers")
+    if idx + 3 >= len(parts):
+        return None
+
+    layer_index = parts[idx + 1]
+    module_name = parts[idx + 2]
+    proj_name = parts[idx + 3]
+
+    if module_name not in ("self_attn", "mlp"):
+        return None
+
+    module_name = "self_attention" if module_name == "self_attn" else "mlp"
+    return layer_index, module_name, proj_name
+
+
+@torch.no_grad()
+def export_param_dict(model: nn.Module, output_path: Path) -> None:
+    """Save attention/MLP parameters with the requested custom key format.
+
+    Exported tensors use keys:
+        layer_index.module_name.proj_name.weight
+        layer_index.module_name.proj_name.lr1
+        layer_index.module_name.proj_name.lr2
+
+    For SparseLoRALinear:
+        weight = sparse base weight
+        lr1    = lora_A  (rank, in_features)
+        lr2    = lora_B  (out_features, rank)
+
+    For plain nn.Linear (e.g. --refine none or unprocessed tail layers):
+        weight = linear.weight
+        lr1/lr2 are exported as empty tensors so downstream code can still
+        reconstruct merged_weight = weight + lr2 @ lr1 uniformly.
+    """
+    param_dict = OrderedDict()
+    exported_modules = 0
+
+    for name, module in model.named_modules():
+        if not isinstance(module, (nn.Linear, SparseLoRALinear)):
+            continue
+
+        parsed = _parse_param_export_name(name)
+        if parsed is None:
+            continue
+
+        layer_index, module_name, proj_name = parsed
+        prefix = f"{layer_index}.{module_name}.{proj_name}"
+
+        if isinstance(module, SparseLoRALinear):
+            weight = module.weight_sparse.detach().cpu().clone()
+            lr1 = module.lora_A.detach().cpu().clone()
+            lr2 = module.lora_B.detach().cpu().clone()
+        else:
+            weight = module.weight.detach().cpu().clone()
+            lr1 = torch.empty((0, module.in_features), dtype=module.weight.dtype)
+            lr2 = torch.empty((module.out_features, 0), dtype=module.weight.dtype)
+
+        param_dict[f"{prefix}.weight"] = weight
+        param_dict[f"{prefix}.lr1"] = lr1
+        param_dict[f"{prefix}.lr2"] = lr2
+        exported_modules += 1
+
+    if exported_modules == 0:
+        raise RuntimeError("No attention/MLP projection modules were found for parameter export.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(param_dict, output_path)
+    print(f"Saved custom parameter dictionary with {exported_modules} modules to: {output_path}")
 
 
 @torch.no_grad()
@@ -570,6 +667,14 @@ def main():
 
     # Save results json
     (outdir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+
+    # Export custom parameter dictionary (optional).
+    # Do this before merge_and_restore_linear() so we preserve sparse weight + low-rank factors.
+    if args.export_param_dict:
+        param_dict_path = outdir / args.param_dict_filename
+        export_param_dict(model, param_dict_path)
+        results["param_dict_path"] = str(param_dict_path)
+        (outdir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
     # Export merged HF model (optional)
     if args.export_merged_hf:
