@@ -75,6 +75,8 @@ def parse_args():
     p.add_argument("--use_c4_streaming", action="store_true", help="Use streaming mode for C4 (recommended)")
     p.add_argument("--seq_len", type=int, default=2048)
 
+    p.add_argument("--load_calibration_path", type=str, help="Load pre-selected calibration data. Will ignore other related options.")
+
     # Wanda mask generation mode
     p.add_argument(
         "--wanda_mode",
@@ -382,15 +384,20 @@ def apply_wanda_sequential_prune_and_refine(
     After masks are computed, we optionally apply the paper's low-rank refinement per Linear.
     """
     print("Preparing C4 calibration batches for sequential Wanda...")
-    calib_batches = list(
-        iter_c4_calibration_batches(
-            tok,
-            seq_len=args.seq_len,
-            num_sequences=args.c4_seqs,
-            streaming=args.use_c4_streaming,
-            seed=args.seed,
+
+    if args.load_calibration_path is not None:
+        calib_batches = torch.load(args.load_calibration_path)
+        calib_batches = [{"input_ids": s[0], "attention_mask": s[1]} for s in calib_batches]
+    else:
+        calib_batches = list(
+            iter_c4_calibration_batches(
+                tok,
+                seq_len=args.seq_len,
+                num_sequences=args.c4_seqs,
+                streaming=args.use_c4_streaming,
+                seed=args.seed,
+            )
         )
-    )
     if len(calib_batches) != args.c4_seqs:
         print(f"[warn] Requested {args.c4_seqs} calibration seqs but got {len(calib_batches)} from C4 iterator.")
 
@@ -559,13 +566,16 @@ def main():
     wanda_stats = None
     if args.pruning == "wanda" and args.wanda_mode == "oneshot":
         print("[1/3] Collecting Wanda calibration statistics...")
-        calib_iter = iter_c4_calibration_batches(
-            tok,
-            seq_len=args.seq_len,
-            num_sequences=args.c4_seqs,
-            streaming=args.use_c4_streaming,
-            seed=args.seed,
-        )
+        if args.load_calibration_path is not None:
+            calib_iter = torch.load(args.load_calibration_path)
+        else:
+            calib_iter = iter_c4_calibration_batches(
+                tok,
+                seq_len=args.seq_len,
+                num_sequences=args.c4_seqs,
+                streaming=args.use_c4_streaming,
+                seed=args.seed,
+            )
         wanda_stats = collect_wanda_stats(
             model,
             name_to_linear,
