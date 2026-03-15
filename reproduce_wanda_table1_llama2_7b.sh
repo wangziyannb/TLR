@@ -61,7 +61,6 @@ for NM in "2 4"; do
       --pruning wanda --nm $N $M \
       --c4_seqs "$C4_SEQS" --seq_len "$SEQ_LEN" --use_c4_streaming \
       --refine "$REF" --rank "$RANK" --iters "$ITERS" \
-      --eval_ppl --wikitext_seqs "$WIKITEXT_SEQS" \
       --load_calibration_path "$LOAD_CALIBRATION_PATH" --export_param_dict \
       --output_dir "$OUT/wanda_${N}of${M}_${REF}_${RANK}"
   done

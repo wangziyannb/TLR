@@ -188,7 +188,7 @@ def _parse_param_export_name(qualified_name: str) -> Optional[Tuple[str, str, st
     if module_name not in ("self_attn", "mlp"):
         return None
 
-    module_name = "self_attention" if module_name == "self_attn" else "mlp"
+    module_name = "self_attn" if module_name == "self_attn" else "mlp"
     return layer_index, module_name, proj_name
 
 
@@ -223,7 +223,7 @@ def export_param_dict(model: nn.Module, output_path: Path) -> None:
             continue
 
         layer_index, module_name, proj_name = parsed
-        prefix = f"{layer_index}.{module_name}.{proj_name}"
+        prefix = f"model.layers.{layer_index}.{module_name}.{proj_name}"
 
         if isinstance(module, SparseLoRALinear):
             weight = module.weight_sparse.detach().cpu().clone()
@@ -234,9 +234,9 @@ def export_param_dict(model: nn.Module, output_path: Path) -> None:
             lr1 = torch.empty((0, module.in_features), dtype=module.weight.dtype)
             lr2 = torch.empty((module.out_features, 0), dtype=module.weight.dtype)
 
-        param_dict[f"{prefix}.weight"] = weight
-        param_dict[f"{prefix}.lr1"] = lr1
-        param_dict[f"{prefix}.lr2"] = lr2
+        param_dict[f"{prefix}.sp.weight"] = weight
+        param_dict[f"{prefix}.lr.l1.weight"] = lr1
+        param_dict[f"{prefix}.lr.l2.weight"] = lr2
         exported_modules += 1
 
     if exported_modules == 0:

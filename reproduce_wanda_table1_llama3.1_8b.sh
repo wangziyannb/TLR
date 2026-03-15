@@ -41,17 +41,17 @@ mkdir -p "$OUT"
 #  done
 #done
 
-for SP in 0.5; do
-  for REF in ours; do
-    python apply_prune_refine.py \
-      --model "$MODEL" \
-      --pruning wanda --sparsity "$SP" \
-      --c4_seqs "$C4_SEQS" --seq_len "$SEQ_LEN" --use_c4_streaming \
-      --refine "$REF" --rank "$RANK" --iters "$ITERS" \
-      --load_calibration_path "$LOAD_CALIBRATION_PATH" --export_param_dict \
-      --output_dir "$OUT/wanda_sp${SP}_${REF}_${RANK}"
-  done
-done
+#for SP in 0.5; do
+#  for REF in ours; do
+#    python apply_prune_refine.py \
+#      --model "$MODEL" \
+#      --pruning wanda --sparsity "$SP" \
+#      --c4_seqs "$C4_SEQS" --seq_len "$SEQ_LEN" --use_c4_streaming \
+#      --refine "$REF" --rank "$RANK" --iters "$ITERS" \
+#      --load_calibration_path "$LOAD_CALIBRATION_PATH" --export_param_dict \
+#      --output_dir "$OUT/wanda_sp${SP}_${REF}_${RANK}"
+#  done
+#done
 
 for NM in "2 4"; do
   N=$(echo $NM | awk '{print $1}')
