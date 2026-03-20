@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -533,6 +534,7 @@ def apply_wanda_sequential_prune_and_refine(
 
 
 def main():
+
     args = parse_args()
     torch.manual_seed(args.seed)
 
@@ -591,7 +593,7 @@ def main():
 
     # Apply pruning + refinement
     print("[2/3] Applying pruning + refinement...")
-
+    t1=time.time()
     if args.pruning == "wanda" and args.wanda_mode == "sequential":
         # Faithful Wanda implementation (layer-wise, with updated activations)
         apply_wanda_sequential_prune_and_refine(
@@ -665,7 +667,8 @@ def main():
         "rank": args.rank,
         "iters": args.iters,
     }
-
+    t2=time.time()
+    print(f'time_cost:{t2-t1}')
     # Evaluate perplexity
     if args.eval_ppl:
         print("[3/3] Evaluating WikiText-2 perplexity...")
